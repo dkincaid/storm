@@ -10,8 +10,7 @@
   (:import [java.net InetSocketAddress BindException])
   (:import [java.io File])
   (:import [backtype.storm.utils Utils])
-  (:use [backtype.storm util log config])
-  (:use [clojure.contrib.def :only [defnk]]))
+  (:use [backtype.storm util log config]))
 
 (def zk-keeper-states
   {Watcher$Event$KeeperState/Disconnected :disconnected
@@ -63,7 +62,8 @@
 
 (def zk-create-modes
   {:ephemeral CreateMode/EPHEMERAL
-   :persistent CreateMode/PERSISTENT})
+   :persistent CreateMode/PERSISTENT
+   :sequential CreateMode/PERSISTENT_SEQUENTIAL})
 
 (defn create-node
   ([^CuratorFramework zk ^String path ^bytes data mode]
@@ -77,8 +77,11 @@
        (.. zk (checkExists) (watched) (forPath (normalize-path path))) 
        (.. zk (checkExists) (forPath (normalize-path path))))))
 
-(defn delete-node [^CuratorFramework zk ^String path]
-  (.. zk (delete) (forPath (normalize-path path))))
+(defnk delete-node [^CuratorFramework zk ^String path :force false]
+  (try-cause  (.. zk (delete) (forPath (normalize-path path)))
+    (catch KeeperException$NoNodeException e
+      (when-not force (throw e))
+      )))
 
 (defn mkdirs [^CuratorFramework zk ^String path]
   (let [path (normalize-path path)]
@@ -122,25 +125,22 @@
                                   ))]
         (doseq [c children]
           (delete-recursive zk (full-path path c)))
-        (try-cause (delete-node zk path)
-                   (catch KeeperException$NoNodeException e
-                                  nil
-                                  ))
+        (delete-node zk path :force true)
         ))))
 
-(defn mk-inprocess-zookeeper [localdir]
+(defnk mk-inprocess-zookeeper [localdir :port nil]
   (let [localfile (File. localdir)
         zk (ZooKeeperServer. localfile localfile 2000)
-        [port factory] (loop [port 2000]
-                         (if-let [factory-tmp (try-cause (NIOServerCnxn$Factory. (InetSocketAddress. port))
-                                           (catch BindException e
-                                             (when (>= (inc port) 65535)
-                                               (throw (RuntimeException. "No port is available to launch an inprocess zookeeper.")))))]
-                           [port factory-tmp]
-                           (recur (inc port))))]
-    (log-message "Starting inprocess zookeeper at port " port " and dir " localdir)    
+        [retport factory] (loop [retport (if port port 2000)]
+                            (if-let [factory-tmp (try-cause (NIOServerCnxn$Factory. (InetSocketAddress. retport))
+                                              (catch BindException e
+                                                (when (> (inc retport) (if port port 65535))
+                                                  (throw (RuntimeException. "No port is available to launch an inprocess zookeeper.")))))]
+                              [retport factory-tmp]
+                              (recur (inc retport))))]
+    (log-message "Starting inprocess zookeeper at port " retport " and dir " localdir)    
     (.startup factory zk)
-    [port factory]
+    [retport factory]
     ))
 
 (defn shutdown-inprocess-zookeeper [handle]

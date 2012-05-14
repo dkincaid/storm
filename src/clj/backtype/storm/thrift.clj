@@ -10,8 +10,7 @@
   (:import [backtype.storm.clojure RichShellBolt RichShellSpout])
   (:import [org.apache.thrift7.protocol TBinaryProtocol TProtocol])
   (:import [org.apache.thrift7.transport TTransport TFramedTransport TSocket])
-  (:use [backtype.storm util config])
-  (:use [clojure.contrib.def :only [defnk]])
+  (:use [backtype.storm util config log])
   )
 
 (defn instantiate-java-object [^JavaObject obj]
@@ -50,6 +49,7 @@
     ))
 
 (defn nimbus-client-and-conn [host port]
+  (log-message "Connecting to Nimbus at " host ":" port)
   (let [transport (TFramedTransport. (TSocket. host port))
         prot (TBinaryProtocol. transport)
         client (Nimbus$Client. prot)]
@@ -87,10 +87,12 @@
       output-spec
       )))
 
-(defn mk-plain-component-common [inputs output-spec parallelism-hint]
+(defnk mk-plain-component-common [inputs output-spec parallelism-hint :conf nil]
   (let [ret (ComponentCommon. (HashMap. inputs) (HashMap. (mk-output-spec output-spec)))]
     (when parallelism-hint
       (.set_parallelism_hint ret parallelism-hint))
+    (when conf
+      (.set_json_conf ret (to-json conf)))
     ret
     ))
 
@@ -152,8 +154,8 @@
        (mk-grouping grouping-spec)]
       )))
 
-(defnk mk-bolt-spec* [inputs bolt outputs :p nil]
-  (let [common (mk-plain-component-common (mk-inputs inputs) outputs p)]
+(defnk mk-bolt-spec* [inputs bolt outputs :p nil :conf nil]
+  (let [common (mk-plain-component-common (mk-inputs inputs) outputs p :conf conf)]
     (Bolt. (ComponentObject/serialized_java (Utils/serialize bolt))
            common )))
 
@@ -195,9 +197,9 @@
   ([spout-map bolt-map]
     (let [builder (TopologyBuilder.)]
       (doseq [[name {spout :obj p :p conf :conf}] spout-map]
-        (-> builder (.setSpout name spout p) (.addConfigurations conf)))
+        (-> builder (.setSpout name spout (if-not (nil? p) (int p) p)) (.addConfigurations conf)))
       (doseq [[name {bolt :obj p :p conf :conf inputs :inputs}] bolt-map]
-        (-> builder (.setBolt name bolt p) (.addConfigurations conf) (add-inputs inputs)))
+        (-> builder (.setBolt name bolt (if-not (nil? p) (int p) p)) (.addConfigurations conf) (add-inputs inputs)))
       (.createTopology builder)
       ))
   ([spout-map bolt-map state-spout-map]

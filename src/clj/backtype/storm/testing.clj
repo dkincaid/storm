@@ -25,8 +25,6 @@
   (:require [backtype.storm [zookeeper :as zk]])
   (:require [backtype.storm.messaging.loader :as msg-loader])
   (:require [backtype.storm.daemon.acker :as acker])
-  (:use [clojure.contrib.def :only [defnk]])
-  (:use [clojure.contrib.seq :only [find-first]])
   (:use [backtype.storm cluster util thrift config log]))
 
 (defn feeder-spout [fields]
@@ -82,15 +80,14 @@
                                 SUPERVISOR-SLOTS-PORTS port-ids
                                })
         id-fn (if id (fn [] id) supervisor/generate-supervisor-id)
-        daemon (with-var-roots [supervisor/generate-supervisor-id id-fn] (supervisor/mk-supervisor supervisor-conf (:shared-context cluster-map)))]
+        daemon (with-var-roots [supervisor/generate-supervisor-id id-fn] (supervisor/mk-supervisor supervisor-conf (:shared-context cluster-map) (supervisor/standalone-supervisor)))]
     (swap! (:supervisors cluster-map) conj daemon)
     (swap! (:tmp-dirs cluster-map) conj tmp-dir)
     daemon
     ))
 
 (defn mk-shared-context [conf]
-  (if (and (= (conf STORM-CLUSTER-MODE) "local")
-           (not (conf STORM-LOCAL-MODE-ZMQ)))
+  (if-not (conf STORM-LOCAL-MODE-ZMQ)
     (msg-loader/mk-local-context)
     ))
 
@@ -112,7 +109,8 @@
         nimbus-tmp (local-temp-path)
         port-counter (mk-counter)
         nimbus (nimbus/service-handler
-                (assoc daemon-conf STORM-LOCAL-DIR nimbus-tmp))
+                (assoc daemon-conf STORM-LOCAL-DIR nimbus-tmp)
+                (nimbus/standalone-nimbus))
         context (mk-shared-context daemon-conf)
         cluster-map {:nimbus nimbus
                      :port-counter port-counter
@@ -198,6 +196,7 @@
        ~@body
      (catch Throwable t#
        (log-error t# "Error in cluster")
+       (throw t#)
        )
      (finally
        (kill-local-storm-cluster ~cluster-sym)))
@@ -224,14 +223,15 @@
   (.submitTopology nimbus storm-name nil (to-json conf) topology))
 
 (defn submit-mocked-assignment [nimbus storm-name conf topology task->component task->node+port]
-  (with-var-roots [nimbus/mk-task-component-assignments (fn [& ignored] task->component)
+  (with-var-roots [common/storm-task-info (fn [& ignored] task->component)
                    nimbus/compute-new-task->node+port (fn [& ignored] task->node+port)]
     (submit-local-topology nimbus storm-name conf topology)
     ))
 
 (defn mk-capture-launch-fn [capture-atom]
-  (fn [conf shared-context storm-id supervisor-id port worker-id _]
-    (let [existing (get @capture-atom [supervisor-id port] [])]
+  (fn [supervisor storm-id port worker-id]
+    (let [supervisor-id (:supervisor-id supervisor)
+          existing (get @capture-atom [supervisor-id port] [])]
       (swap! capture-atom assoc [supervisor-id port] (conj existing storm-id))
       )))
 
@@ -250,11 +250,13 @@
 
 (defn mk-capture-shutdown-fn [capture-atom]
   (let [existing-fn supervisor/shutdown-worker]
-    (fn [conf supervisor-id worker-id worker-thread-pids-atom]
-      (let [port (find-worker-port conf worker-id)
+    (fn [supervisor worker-id]
+      (let [conf (:conf supervisor)
+            supervisor-id (:supervisor-id supervisor)
+            port (find-worker-port conf worker-id)
             existing (get @capture-atom [supervisor-id port] 0)]      
         (swap! capture-atom assoc [supervisor-id port] (inc existing))
-        (existing-fn conf supervisor-id worker-id worker-thread-pids-atom)
+        (existing-fn supervisor worker-id)
         ))))
 
 (defmacro capture-changed-workers [& body]
@@ -275,16 +277,20 @@
 
 (defnk aggregated-stat [cluster-map storm-name stat-key :component-ids nil]
   (let [state (:storm-cluster-state cluster-map)
+        nimbus (:nimbus cluster-map)
         storm-id (common/get-storm-id state storm-name)
+        
         component->tasks (reverse-map
                           (common/storm-task-info
-                           state
-                           storm-id))
+                           (.getUserTopology nimbus storm-id)
+                           (from-json (.getTopologyConf nimbus storm-id))))
         component->tasks (if component-ids
                            (select-keys component->tasks component-ids)
                            component->tasks)
         task-ids (apply concat (vals component->tasks))
-        heartbeats (dofor [id task-ids] (.task-heartbeat state storm-id id))
+        assignment (.assignment-info state storm-id nil) 
+        taskbeats (.taskbeats state storm-id (:task->node+port assignment))
+        heartbeats (dofor [id task-ids] (get taskbeats id))
         stats (dofor [hb heartbeats] (if hb (stat-key (:stats hb)) 0))]
     (reduce + stats)
     ))
@@ -541,6 +547,6 @@
         spout-spec (mk-spout-spec* (TestWordSpout.)
                                    {stream fields})
         topology (StormTopology. {component spout-spec} {} {})
-        context (TopologyContext. topology (read-storm-config) {1 component} "test-storm-id" nil nil 1 nil [1])]
+        context (TopologyContext. topology (read-storm-config) {(int 1) component} "test-storm-id" nil nil (int 1) nil [(int 1)])]
     (Tuple. context values 1 stream)
     ))
