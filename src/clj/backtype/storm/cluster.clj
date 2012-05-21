@@ -180,6 +180,18 @@
 (defn- parse-error-path [^String p]
   (Long/parseLong (.substring p 1)))
 
+
+(defn convert-task-beats [tasks worker-hb]
+  ;; ensures that we only return heartbeats for tasks assigned to this worker
+  (let [task-stats (:task-stats worker-hb)]
+    (->> tasks
+      (map (fn [t] 
+             (if (contains? task-stats t)
+               {t {:time-secs (:time-secs worker-hb)
+                    :uptime (:uptime worker-hb)
+                    :stats (get task-stats t)}})))
+      (into {}))))
+
 ;; Watches should be used for optimization. When ZK is reconnecting, they're not guaranteed to be called.
 (defn mk-storm-cluster-state [cluster-state-spec]
   (let [[solo? cluster-state] (if (satisfies? ClusterState cluster-state-spec)
@@ -244,8 +256,7 @@
         (let [node+port->tasks (reverse-map task->node+port)
               all-heartbeats (for [[[node port] tasks] node+port->tasks :let [tasks (set tasks)]]
                                 (->> (get-worker-heartbeat this storm-id node port)
-                                     :taskbeats
-                                     (filter-key tasks)
+                                     (convert-task-beats tasks)
                                      ))]
           (apply merge all-heartbeats)))
 
