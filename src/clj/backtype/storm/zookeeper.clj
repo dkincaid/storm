@@ -6,10 +6,10 @@
             ZooDefs ZooDefs$Ids CreateMode WatchedEvent Watcher$Event Watcher$Event$KeeperState
             Watcher$Event$EventType KeeperException$NodeExistsException])
   (:import [org.apache.zookeeper.data Stat])
-  (:import [org.apache.zookeeper.server ZooKeeperServer NIOServerCnxnFactory])
+  (:import [org.apache.zookeeper.server ZooKeeperServer NIOServerCnxn$Factory])
   (:import [java.net InetSocketAddress BindException])
   (:import [java.io File])
-  (:import [backtype.storm.utils Utils])
+  (:import [backtype.storm.utils Utils ZookeeperAuthInfo])
   (:use [backtype.storm util log config]))
 
 (def zk-keeper-states
@@ -30,8 +30,8 @@
 (defn- default-watcher [state type path]
   (log-message "Zookeeper state update: " state type path))
 
-(defnk mk-client [conf servers port :root "" :watcher default-watcher]
-  (let [fk (Utils/newCurator conf servers port root)]
+(defnk mk-client [conf servers port :root "" :watcher default-watcher :auth-conf nil]
+  (let [fk (Utils/newCurator conf servers port root (when auth-conf (ZookeeperAuthInfo. auth-conf)))]
     (.. fk
         (getCuratorListenable)
         (addListener
@@ -42,21 +42,21 @@
                  (watcher (zk-keeper-states (.getState event))
                           (zk-event-types (.getType event))
                           (.getPath event))))))))
-    (.. fk
-        (getUnhandledErrorListenable)
-        (addListener
-         (reify UnhandledErrorListener
-           (unhandledError [this msg error]
-             (if (or (exception-cause? InterruptedException error)
-                     (exception-cause? java.nio.channels.ClosedByInterruptException error))
-               (do (log-warn-error error "Zookeeper exception " msg)
-                   (let [to-throw (InterruptedException.)]
-                     (.initCause to-throw error)
-                     (throw to-throw)
-                     ))
-               (do (log-error error "Unrecoverable Zookeeper error " msg)
-                   (halt-process! 1 "Unrecoverable Zookeeper error")))
-             ))))
+;;    (.. fk
+;;        (getUnhandledErrorListenable)
+;;        (addListener
+;;         (reify UnhandledErrorListener
+;;           (unhandledError [this msg error]
+;;             (if (or (exception-cause? InterruptedException error)
+;;                     (exception-cause? java.nio.channels.ClosedByInterruptException error))
+;;               (do (log-warn-error error "Zookeeper exception " msg)
+;;                   (let [to-throw (InterruptedException.)]
+;;                     (.initCause to-throw error)
+;;                     (throw to-throw)
+;;                     ))
+;;               (do (log-error error "Unrecoverable Zookeeper error " msg)
+;;                   (halt-process! 1 "Unrecoverable Zookeeper error")))
+;;             ))))
     (.start fk)
     fk))
 
@@ -132,7 +132,7 @@
   (let [localfile (File. localdir)
         zk (ZooKeeperServer. localfile localfile 2000)
         [retport factory] (loop [retport (if port port 2000)]
-                            (if-let [factory-tmp (try-cause (NIOServerCnxnFactory/createFactory retport 60) ;; 60 is the default maxclientcnxns
+                            (if-let [factory-tmp (try-cause (NIOServerCnxn$Factory. (InetSocketAddress. retport))
                                               (catch BindException e
                                                 (when (> (inc retport) (if port port 65535))
                                                   (throw (RuntimeException. "No port is available to launch an inprocess zookeeper.")))))]

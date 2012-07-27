@@ -1,8 +1,8 @@
 Storm is a distributed realtime computation system. Similar to how Hadoop provides a set of general primitives for doing batch processing, Storm provides a set of general primitives for doing realtime computation. Storm is simple, can be used with any programming language, [is used by many companies](https://github.com/nathanmarz/storm/wiki/Powered-By), and is a lot of fun to use!
 
-The [Rationale page](https://github.com/nathanmarz/storm/wiki/Rationale) on the wiki explains what Storm is and why it was built. The [video](http://www.infoq.com/presentations/Storm) and [slides](http://www.slideshare.net/nathanmarz/storm-distributed-and-faulttolerant-realtime-computation) of Storm's launch presentation are also good introductions to the project.
+The [Rationale page](https://github.com/nathanmarz/storm/wiki/Rationale) on the wiki explains what Storm is and why it was built. [This presentation](http://vimeo.com/40972420) is also a good introduction to the project.
 
-Follow [@stormprocessor](https://twitter.com/stormprocessor) on Twitter for updates on the project.
+Storm has a website at [storm-project.net](http://storm-project.net). Follow [@stormprocessor](https://twitter.com/stormprocessor) on Twitter for updates on the project.
 
 ## Documentation
 
@@ -52,6 +52,9 @@ You must not remove this notice, or any other, from this software.
 * Fabian Neumann ([@hellp](https://github.com/hellp))
 * Soren Macbeth ([@sorenmacbeth](https://github.com/sorenmacbeth))
 * Ashley  Brown ([@ashleywbrown](https://github.com/ashleywbrown))
+* Guanpeng Xu ([@herberteuler](https://github.com/herberteuler))
+* Vinod Chandru ([@vinodc](https://github.com/vinodc))
+* Martin Kleppmann ([@ept](https://github.com/ept))
 
 ## Acknowledgements
 
