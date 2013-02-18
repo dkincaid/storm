@@ -14,7 +14,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.json.simple.JSONObject;
 
 /**
@@ -45,7 +46,7 @@ import org.json.simple.JSONObject;
  * </pre>
  */
 public class ShellBolt implements IBolt {
-    public static Logger LOG = Logger.getLogger(ShellBolt.class);
+    public static Logger LOG = LoggerFactory.getLogger(ShellBolt.class);
     Process _subprocess;
     OutputCollector _collector;
     Map<String, Tuple> _inputs = new ConcurrentHashMap<String, Tuple>();
@@ -97,6 +98,8 @@ public class ShellBolt implements IBolt {
                             handleAck(action);
                         } else if (command.equals("fail")) {
                             handleFail(action);
+                        } else if (command.equals("error")) {
+                            handleError(action);
                         } else if (command.equals("log")) {
                             String msg = (String) action.get("msg");
                             LOG.info("Shell msg: " + msg);
@@ -177,6 +180,11 @@ public class ShellBolt implements IBolt {
         _collector.fail(failed);
     }
 
+    private void handleError(Map action) {
+        String msg = (String) action.get("msg");
+        _collector.reportError(new Exception("Shell Process Exception: " + msg));
+    }
+
     private void handleEmit(Map action) throws InterruptedException {
         String stream = (String) action.get("stream");
         if(stream==null) stream = Utils.DEFAULT_STREAM_ID;
@@ -198,7 +206,10 @@ public class ShellBolt implements IBolt {
         }
         if(task==null) {
             List<Integer> outtasks = _collector.emit(stream, anchors, tuple);
-            _pendingWrites.put(outtasks);
+            Object need_task_ids = action.get("need_task_ids");
+            if (need_task_ids == null || ((Boolean) need_task_ids).booleanValue()) {
+                _pendingWrites.put(outtasks);
+            }
         } else {
             _collector.emitDirect((int)task.longValue(), stream, anchors, tuple);
         }

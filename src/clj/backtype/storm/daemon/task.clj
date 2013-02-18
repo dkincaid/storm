@@ -5,8 +5,9 @@
   (:import [backtype.storm.tuple Tuple])
   (:import [backtype.storm.generated SpoutSpec Bolt StateSpoutSpec])
   (:import [backtype.storm.hooks.info SpoutAckInfo SpoutFailInfo
-              EmitInfo BoltFailInfo BoltAckInfo])
-  (:require [backtype.storm [tuple :as tuple]]))
+            EmitInfo BoltFailInfo BoltAckInfo])
+  (:require [backtype.storm [tuple :as tuple]])
+  (:require [backtype.storm.daemon.builtin-metrics :as builtin-metrics]))
 
 (bootstrap)
 
@@ -28,7 +29,8 @@
       (:default-shared-resources worker)
       (:user-shared-resources worker)
       (:shared-executor-data executor-data)
-      )))
+      (:interval->task->metric-registry executor-data)
+      (:open-or-prepare-was-called? executor-data))))
 
 (defn system-topology-context [worker executor-data tid]
   ((mk-topology-context-builder
@@ -82,16 +84,23 @@
 
 
 ;; TODO: this is all expensive... should be precomputed
-(defn send-unanchored [task-data stream values]
-  (let [^TopologyContext topology-context (:system-context task-data)
-        tasks-fn (:tasks-fn task-data)
-        transfer-fn (-> task-data :executor-data :transfer-fn)]
-    (fast-list-iter [t (tasks-fn stream values)]
-      (transfer-fn t
-                   (TupleImpl. topology-context
-                               values
-                               (.getThisTaskId topology-context)
-                               stream)))))
+(defn send-unanchored
+  ([task-data stream values overflow-buffer]
+    (let [^TopologyContext topology-context (:system-context task-data)
+          tasks-fn (:tasks-fn task-data)
+          transfer-fn (-> task-data :executor-data :transfer-fn)
+          out-tuple (TupleImpl. topology-context
+                                 values
+                                 (.getThisTaskId topology-context)
+                                 stream)]
+      (fast-list-iter [t (tasks-fn stream values)]
+        (transfer-fn t
+                     out-tuple
+                     overflow-buffer)
+        )))
+    ([task-data stream values]
+      (send-unanchored task-data stream values nil)
+      ))
 
 (defn mk-tasks-fn [task-data]
   (let [task-id (:task-id task-data)
@@ -104,6 +113,7 @@
         user-context (:user-context task-data)
         executor-stats (:stats executor-data)
         debug? (= true (storm-conf TOPOLOGY-DEBUG))]
+        
     (fn ([^Integer out-task-id ^String stream ^List values]
           (when debug?
             (log-message "Emitting direct: " out-task-id "; " component-id " " stream " " values))
@@ -113,11 +123,13 @@
                 out-task-id (if grouping out-task-id)]
             (when (and (not-nil? grouping) (not= :direct grouping))
               (throw (IllegalArgumentException. "Cannot emitDirect to a task expecting a regular grouping")))                          
-            (apply-hooks user-context .emit (EmitInfo. values stream [out-task-id]))
+            (apply-hooks user-context .emit (EmitInfo. values stream task-id [out-task-id]))
             (when (emit-sampler)
+              (builtin-metrics/emitted-tuple! (:builtin-metrics task-data) executor-stats stream)
               (stats/emitted-tuple! executor-stats stream)
               (if out-task-id
-                (stats/transferred-tuples! executor-stats stream 1)))
+                (stats/transferred-tuples! executor-stats stream 1)
+                (builtin-metrics/transferred-tuple! (:builtin-metrics task-data) executor-stats stream 1)))
             (if out-task-id [out-task-id])
             ))
         ([^String stream ^List values]
@@ -133,10 +145,12 @@
                    (.addAll out-tasks comp-tasks)
                    (.add out-tasks comp-tasks)
                    )))
-             (apply-hooks user-context .emit (EmitInfo. values stream out-tasks))
+             (apply-hooks user-context .emit (EmitInfo. values stream task-id out-tasks))
              (when (emit-sampler)
                (stats/emitted-tuple! executor-stats stream)
-               (stats/transferred-tuples! executor-stats stream (count out-tasks)))
+               (builtin-metrics/emitted-tuple! (:builtin-metrics task-data) executor-stats stream)              
+               (stats/transferred-tuples! executor-stats stream (count out-tasks))
+               (builtin-metrics/transferred-tuple! (:builtin-metrics task-data) executor-stats stream (count out-tasks)))
              out-tasks)))
     ))
 
@@ -146,9 +160,9 @@
     :task-id task-id
     :system-context (system-topology-context (:worker executor-data) executor-data task-id)
     :user-context (user-topology-context (:worker executor-data) executor-data task-id)
+    :builtin-metrics (builtin-metrics/make-data (:type executor-data))
     :tasks-fn (mk-tasks-fn <>)
-    :object (get-task-object (.getRawTopology ^TopologyContext (:system-context <>)) (:component-id executor-data))
-    ))
+    :object (get-task-object (.getRawTopology ^TopologyContext (:system-context <>)) (:component-id executor-data))))
 
 
 (defn mk-task [executor-data task-id]

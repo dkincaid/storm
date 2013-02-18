@@ -13,7 +13,18 @@
 #     - org.mycompany.MyType
 #     - org.mycompany.MyType2: org.mycompany.MyType2Serializer
 #
+## List of custom kryo decorators
+# topology.kryo.decorators:
+#     - org.mycompany.MyDecorator
+#
 ## Locations of the drpc servers
 # drpc.servers:
 #     - "server1"
 #     - "server2"
+
+## Metrics Consumers
+# topology.metrics.consumer.register:
+#    - class: "org.mycompany.MyMetricsConsumer"
+#      argument: 
+#         - endpoint: "metrics-collector.mycompany.org"
+#      parallelism.hint: 1

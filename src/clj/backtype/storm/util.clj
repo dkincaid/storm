@@ -328,7 +328,7 @@
   (try-cause
     (exec-command! (str "unzip -qq " jarpath " " dir "/** -d " destdir))
   (catch ExecuteException e
-    (log-message "Error when trying to extract " dir " from " jarpath))
+    (log-message "Could not extract " dir " from " jarpath))
   ))
 
 (defn ensure-process-killed! [pid]
@@ -416,10 +416,12 @@
   "Removes file or directory at the path. Not recursive. Throws exception on failure"
   [path]
   (log-debug "Removing path " path)
+<<<<<<< HEAD
+(when (exists-file? path)
   (let [deleted? (.delete (.getCanonicalFile (File. path)))]
     (when-not deleted?
       (throw (RuntimeException. (str "Failed to delete " path))))
-    ))
+    )))
 
 (defn local-mkdirs
   [path]
@@ -488,8 +490,8 @@
 (defn collectify [obj]
   (if (or (sequential? obj) (instance? Collection obj)) obj [obj]))
 
-(defn to-json [^Map m]
-  (JSONValue/toJSONString m))
+(defn to-json [obj]
+  (JSONValue/toJSONString obj))
 
 (defn from-json [^String str]
   (if str
@@ -674,7 +676,7 @@
 (defn throw-runtime [& strs]
   (throw (RuntimeException. (apply str strs))))
 
-(defn redirect-stdio-to-log4j! []
+(defn redirect-stdio-to-slf4j! []
   ;; set-var-root doesn't work with *out* and *err*, so digging much deeper here
   ;; Unfortunately, this code seems to work at the REPL but not when spawned as worker processes
   ;; it might have something to do with being a child process
@@ -807,3 +809,18 @@
             ^List curr (get-with-default ret key (ArrayList.))]
         (.add curr e)))
     ret ))
+
+(defn new-instance [klass]
+  (let [klass (if (string? klass) (Class/forName klass) klass)]
+    (.newInstance klass)
+    ))
+
+(defmacro -<>
+  ([x] x)
+  ([x form] (if (seq? form)
+              (with-meta
+                (let [[begin [_ & end]] (split-with #(not= % '<>) form)]
+                  (concat begin [x] end))
+                (meta form))
+              (list form x)))
+  ([x form & more] `(-<> (-<> ~x ~form) ~@more)))

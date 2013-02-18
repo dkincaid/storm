@@ -21,9 +21,9 @@
   )
 
 
-(defn- read-my-executors [storm-cluster-state storm-id supervisor-id callback]
+(defn- read-my-executors [storm-cluster-state storm-id assignment-id callback]
   (let [assignment (.assignment-info storm-cluster-state storm-id callback)
-        my-executors (filter (fn [[_ [node _]]] (= node supervisor-id))
+        my-executors (filter (fn [[_ [node _]]] (= node assignment-id))
                                (:executor->node+port assignment))
         port-executors (apply merge-with
                           concat
@@ -38,14 +38,14 @@
     ))
 
 (defn- read-assignments
-  "Returns map from port to struct containing :storm-id and :executors and :master-code-dir"
-  [storm-cluster-state supervisor-id callback]
+  "Returns map from port to struct containing :storm-id and :executors"
+  [storm-cluster-state assignment-id callback]
   (let [storm-ids (.assignments storm-cluster-state callback)]
     (apply merge-with
            (fn [& ignored]
              (throw (RuntimeException.
                      "Should not have multiple topologies assigned to one port")))
-           (dofor [sid storm-ids] (read-my-executors storm-cluster-state sid supervisor-id callback))
+           (dofor [sid storm-ids] (read-my-executors storm-cluster-state sid assignment-id callback))
            )))
 
 (defn- read-storm-code-locations
@@ -174,10 +174,12 @@
    :worker-thread-pids-atom (atom {})
    :storm-cluster-state (cluster/mk-storm-cluster-state conf)
    :local-state (supervisor-state conf)
-   :supervisor-id (.getId isupervisor)
+   :supervisor-id (.getSupervisorId isupervisor)
+   :assignment-id (.getAssignmentId isupervisor)
    :my-hostname (if (contains? conf STORM-LOCAL-HOSTNAME)
                   (conf STORM-LOCAL-HOSTNAME)
                   (local-hostname))
+   :curr-assignment (atom nil) ;; used for reporting used ports when heartbeating
    :timer (mk-timer :kill-fn (fn [t]
                                (log-error t "Error when processing event")
                                (halt-process! 20 "Error when processing an event")
@@ -250,6 +252,12 @@
          id)))
     ))
 
+(defn assigned-storm-ids-from-port-assignments [assignment]
+  (->> assignment
+       vals
+       (map :storm-id)
+       set))
+
 (defn mk-synchronize-supervisor [supervisor sync-processes event-manager processes-event-manager]
   (fn this []
     (let [conf (:conf supervisor)
@@ -258,14 +266,14 @@
           ^LocalState local-state (:local-state supervisor)
           sync-callback (fn [& ignored] (.add event-manager this))
           storm-code-map (read-storm-code-locations storm-cluster-state sync-callback)
-          assigned-storm-ids (set (keys storm-code-map))
           downloaded-storm-ids (set (read-downloaded-storm-ids conf))
           all-assignment (read-assignments
                            storm-cluster-state
-                           (:supervisor-id supervisor)
+                           (:assignment-id supervisor)
                            sync-callback)
           new-assignment (->> all-assignment
                               (filter-key #(.confirmAssigned isupervisor %)))
+          assigned-storm-ids (assigned-storm-ids-from-port-assignments new-assignment)
           existing-assignment (.get local-state LS-LOCAL-ASSIGNMENTS)]
       (log-debug "Synchronizing supervisor")
       (log-debug "Storm code map: " storm-code-map)
@@ -278,7 +286,8 @@
       ;;   - should this be done separately from usual monitoring?
       ;; should we only download when topology is assigned to this supervisor?
       (doseq [[storm-id master-code-dir] storm-code-map]
-        (when-not (downloaded-storm-ids storm-id)
+        (when (and (not (downloaded-storm-ids storm-id))
+                   (assigned-storm-ids storm-id))
           (log-message "Downloading code for storm id "
              storm-id
              " from "
@@ -289,13 +298,7 @@
              " from "
              master-code-dir)
           ))
-      ;; remove any downloaded code that's no longer assigned or active
-      (doseq [storm-id downloaded-storm-ids]
-        (when-not (assigned-storm-ids storm-id)
-          (log-message "Removing code for storm id "
-                       storm-id)
-          (rmr (supervisor-stormdist-root conf storm-id))
-          ))
+
       (log-debug "Writing new assignment "
                  (pr-str new-assignment))
       (doseq [p (set/difference (set (keys existing-assignment))
@@ -305,6 +308,17 @@
       (.put local-state
             LS-LOCAL-ASSIGNMENTS
             new-assignment)
+      (reset! (:curr-assignment supervisor) new-assignment)
+      ;; remove any downloaded code that's no longer assigned or active
+      ;; important that this happens after setting the local assignment so that
+      ;; synchronize-supervisor doesn't try to launch workers for which the
+      ;; resources don't exist
+      (doseq [storm-id downloaded-storm-ids]
+        (when-not (assigned-storm-ids storm-id)
+          (log-message "Removing code for storm id "
+                       storm-id)
+          (rmr (supervisor-stormdist-root conf storm-id))
+          ))
       (.add processes-event-manager sync-processes)
       )))
 
@@ -323,6 +337,9 @@
                                (:supervisor-id supervisor)
                                (SupervisorInfo. (current-time-secs)
                                                 (:my-hostname supervisor)
+                                                (:assignment-id supervisor)
+                                                (keys @(:curr-assignment supervisor))
+                                                ;; used ports
                                                 (.getMetadata isupervisor)
                                                 (conf SUPERVISOR-SCHEDULER-META)
                                                 ((:uptime supervisor)))))]
@@ -392,6 +409,7 @@
 (defmethod launch-worker
     :distributed [supervisor storm-id port worker-id]
     (let [conf (:conf supervisor)
+          storm-home (System/getProperty "storm.home")
           stormroot (supervisor-stormdist-root conf storm-id)
           stormjar (supervisor-stormjar-path stormroot)
           storm-conf (read-supervisor-storm-conf conf storm-id)
@@ -403,10 +421,10 @@
           command (str "java -server " childopts
                        " -Djava.library.path=" (conf JAVA-LIBRARY-PATH)
                        " -Dlogfile.name=" logfilename
-                       " -Dstorm.home=" (System/getProperty "storm.home")
-                       " -Dlog4j.configuration=storm.log.properties"
+                       " -Dstorm.home=" storm-home
+                       " -Dlogback.configurationFile=" storm-home "/logback/cluster.xml"
                        " -cp " classpath " backtype.storm.daemon.worker "
-                       (java.net.URLEncoder/encode storm-id) " " (:supervisor-id supervisor)
+                       (java.net.URLEncoder/encode storm-id) " " (:assignment-id supervisor)
                        " " port " " worker-id)]
       (log-message "Launching worker with command: " command)
       (launch-process command :environment {"LD_LIBRARY_PATH" (conf JAVA-LIBRARY-PATH)})
@@ -447,7 +465,7 @@
           worker (worker/mk-worker conf
                                    (:shared-context supervisor)
                                    storm-id
-                                   (:supervisor-id supervisor)
+                                   (:assignment-id supervisor)
                                    port
                                    worker-id)]
       (psim/register-process pid worker)
@@ -476,7 +494,9 @@
         true)
       (getMetadata [this]
         (doall (map int (get @conf-atom SUPERVISOR-SLOTS-PORTS))))
-      (getId [this]
+      (getSupervisorId [this]
+        @id-atom)
+      (getAssignmentId [this]
         @id-atom)
       (killedWorker [this port]
         )

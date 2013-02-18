@@ -30,10 +30,10 @@ You must not remove this notice, or any other, from this software.
 ## Core contributors
 
 * James Xu ([@xumingming](https://github.com/xumingming))
+* Jason Jackson ([@jason_j](http://twitter.com/jason_j))
 
 ## Contributors
 
-* Jason Jackson ([@jason_j](http://twitter.com/jason_j))
 * Christopher Bertels ([@bakkdoor](http://twitter.com/bakkdoor))
 * Michael Montano ([@michaelmontano](http://twitter.com/michaelmontano))
 * Dennis Zhuang ([@killme2008](https://github.com/killme2008))
@@ -51,10 +51,23 @@ You must not remove this notice, or any other, from this software.
 * Nicolas Yzet ([@nicoo](https://github.com/nicoo))
 * Fabian Neumann ([@hellp](https://github.com/hellp))
 * Soren Macbeth ([@sorenmacbeth](https://github.com/sorenmacbeth))
-* Ashley  Brown ([@ashleywbrown](https://github.com/ashleywbrown))
+* Ashley Brown ([@ashleywbrown](https://github.com/ashleywbrown))
 * Guanpeng Xu ([@herberteuler](https://github.com/herberteuler))
 * Vinod Chandru ([@vinodc](https://github.com/vinodc))
 * Martin Kleppmann ([@ept](https://github.com/ept))
+* Evan Chan ([@velvia](https://github.com/velvia))
+* Sjoerd Mulder ([@sjoerdmulder](https://github.com/sjoerdmulder))
+* Yuta Okamoto ([@okapies](https://github.com/okapies))
+* Barry Hart ([@barrywhart](https://github.com/barrywhart))
+* Sergey Lukjanov ([@Frostman](https://github.com/Frostman))
+* Ross Feinstein ([@rnfein](https://github.com/rnfein))
+* Junichiro Takagi ([@tjun](https://github.com/tjun))
+* Bryan Peterson ([@Lazyshot](https://github.com/Lazyshot))
+* Sam Ritchie ([@sritchie](https://github.com/sritchie))
+* Stuart Anderson ([@emblem](https://github.com/emblem))
+* Robert Evans ([@revans2](https://github.com/revans2)) 
+* Andy Feng ([@anfeng](https://github.com/anfeng))
+* Lorcan Coyle ([@lorcan](https://github.com/lorcan))
 
 ## Acknowledgements
 

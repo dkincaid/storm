@@ -1,5 +1,5 @@
 #!/bin/bash
-export JAVA_HOME=$(/usr/libexec/java_home)
+export JAVA_HOME=${JAVA_HOME:/usr/libexec/java_home}
 
 if [ ! -d "$JAVA_HOME/include" ]; then
     echo "
@@ -19,6 +19,8 @@ cd zeromq-2.1.7
 ./configure
 make
 sudo make install
+
+cd ../
 
 #install jzmq (both native and into local maven cache)
 git clone https://github.com/nathanmarz/jzmq.git

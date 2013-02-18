@@ -4,6 +4,7 @@ import com.lmax.disruptor.AlertException;
 import com.lmax.disruptor.ClaimStrategy;
 import com.lmax.disruptor.EventFactory;
 import com.lmax.disruptor.EventHandler;
+import com.lmax.disruptor.InsufficientCapacityException;
 import com.lmax.disruptor.RingBuffer;
 import com.lmax.disruptor.Sequence;
 import com.lmax.disruptor.SequenceBarrier;
@@ -11,6 +12,8 @@ import com.lmax.disruptor.SingleThreadedClaimStrategy;
 import com.lmax.disruptor.WaitStrategy;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  *
@@ -65,7 +68,9 @@ public class DisruptorQueue {
     private void consumeBatchToCursor(long cursor, EventHandler<Object> handler) {
         for(long curr = _consumer.get() + 1; curr <= cursor; curr++) {
             try {
-                Object o = _buffer.get(curr).o;
+                MutableObject mo = _buffer.get(curr);
+                Object o = mo.o;
+                mo.setObject(null);
                 if(o==FLUSH_CACHE) {
                     Object c = null;
                     while(true) {                        
@@ -90,8 +95,25 @@ public class DisruptorQueue {
      * Caches until consumerStarted is called, upon which the cache is flushed to the consumer
      */
     public void publish(Object obj) {
+        try {
+            publish(obj, true);
+        } catch (InsufficientCapacityException ex) {
+            throw new RuntimeException("This code should be unreachable!");
+        }
+    }
+    
+    public void tryPublish(Object obj) throws InsufficientCapacityException {
+        publish(obj, false);
+    }
+    
+    public void publish(Object obj, boolean block) throws InsufficientCapacityException {
         if(consumerStartedFlag) {
-            final long id = _buffer.next();
+            final long id;
+            if(block) {
+                id = _buffer.next();
+            } else {
+                id = _buffer.tryNext(1);
+            }
             final MutableObject m = _buffer.get(id);
             m.setObject(obj);
             _buffer.publish(id);

@@ -4,6 +4,7 @@ import backtype.storm.Config;
 import backtype.storm.generated.ComponentCommon;
 import backtype.storm.generated.StormTopology;
 import backtype.storm.serialization.types.ArrayListSerializer;
+import backtype.storm.serialization.types.ListDelegateSerializer;
 import backtype.storm.serialization.types.HashMapSerializer;
 import backtype.storm.serialization.types.HashSetSerializer;
 import backtype.storm.transactional.TransactionAttempt;
@@ -22,40 +23,36 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import org.apache.log4j.Logger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class SerializationFactory {
-    public static final Logger LOG = Logger.getLogger(SerializationFactory.class);
-    
-    public static class KryoSerializableDefault extends Kryo {
-        boolean _override = false;
-        
-        public void overrideDefault(boolean value) {
-            _override = value;
-        }                
-        
-        @Override
-        public Serializer getDefaultSerializer(Class type) {
-            if(_override) {
-                return new SerializableSerializer();
-            } else {
-                return super.getDefaultSerializer(type);
-            }
-        }        
-    }
+    public static final Logger LOG = LoggerFactory.getLogger(SerializationFactory.class);
     
     public static Kryo getKryo(Map conf) {
-        KryoSerializableDefault k = new KryoSerializableDefault();
-        k.setRegistrationRequired(!((Boolean) conf.get(Config.TOPOLOGY_FALL_BACK_ON_JAVA_SERIALIZATION)));
-        k.setReferences(false);
+        IKryoFactory kryoFactory = (IKryoFactory) Utils.newInstance((String) conf.get(Config.TOPOLOGY_KRYO_FACTORY));
+        Kryo k = kryoFactory.getKryo(conf);        
         k.register(byte[].class);
-        k.register(ListDelegate.class);
+
+        /* tuple payload serializer is specified via configuration */
+        String payloadSerializerName = (String)conf.get(Config.TOPOLOGY_TUPLE_SERIALIZER);
+        try {
+            Class serializerClass  = Class.forName(payloadSerializerName);
+            Serializer serializer = resolveSerializerInstance(k, ListDelegate.class, serializerClass, conf);
+            k.register(ListDelegate.class, serializer);
+        } catch (ClassNotFoundException ex) {
+            LOG.error("Could not load class in class path: " + payloadSerializerName.length(), ex);
+            throw new RuntimeException(ex);
+        } 
+
         k.register(ArrayList.class, new ArrayListSerializer());
         k.register(HashMap.class, new HashMapSerializer());
         k.register(HashSet.class, new HashSetSerializer());
         k.register(BigInteger.class, new BigIntegerSerializer());
         k.register(TransactionAttempt.class);
         k.register(Values.class);
+        k.register(backtype.storm.metric.api.IMetricsConsumer.DataPoint.class);
+        k.register(backtype.storm.metric.api.IMetricsConsumer.TaskInfo.class);
         try {
             JavaBridge.registerPrimitives(k);
             JavaBridge.registerCollections(k);
@@ -65,6 +62,8 @@ public class SerializationFactory {
         
         Map<String, String> registrations = normalizeKryoRegister(conf);
 
+        kryoFactory.preRegister(k, conf);        
+        
         boolean skipMissing = (Boolean) conf.get(Config.TOPOLOGY_SKIP_MISSING_KRYO_REGISTRATIONS);
         for(String klassName: registrations.keySet()) {
             String serializerClassName = registrations.get(klassName);
@@ -76,9 +75,8 @@ public class SerializationFactory {
                 if(serializerClass == null) {
                     k.register(klass);
                 } else {
-                    k.register(klass, resolveSerializerInstance(k, klass, serializerClass));
+                    k.register(klass, resolveSerializerInstance(k, klass, serializerClass, conf));
                 }
-                
             } catch (ClassNotFoundException e) {
                 if(skipMissing) {
                     LOG.info("Could not find serialization or class for " + serializerClassName + ". Skipping registration...");
@@ -87,7 +85,31 @@ public class SerializationFactory {
                 }
             }
         }
-        k.overrideDefault(true);
+
+        kryoFactory.postRegister(k, conf);        
+
+        if (conf.get(Config.TOPOLOGY_KRYO_DECORATORS) != null) {
+            for(String klassName : (List<String>)conf.get(Config.TOPOLOGY_KRYO_DECORATORS)) {
+                try {
+                    Class klass = Class.forName(klassName);
+                    IKryoDecorator decorator = (IKryoDecorator)klass.newInstance();
+                    decorator.decorate(k);
+                } catch(ClassNotFoundException e) {
+                    if(skipMissing) {
+                        LOG.info("Could not find kryo decorator named " + klassName + ". Skipping registration...");
+                    } else {
+                        throw new RuntimeException(e);
+                    }
+                } catch(InstantiationException e) {
+                    throw new RuntimeException(e);
+                } catch(IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                } 
+            }
+        }
+
+        kryoFactory.postDecorate(k, conf);        
+        
         return k;   
     }
     
@@ -128,18 +150,30 @@ public class SerializationFactory {
         }
     }
     
-    private static Serializer resolveSerializerInstance(Kryo k, Class superClass, Class<? extends Serializer> serializerClass) {
+    private static Serializer resolveSerializerInstance(Kryo k, Class superClass, Class<? extends Serializer> serializerClass, Map conf) {
         try {
             try {
-                return serializerClass.getConstructor(Kryo.class, Class.class).newInstance(k, superClass);
+                return serializerClass.getConstructor(Kryo.class, Class.class, Map.class).newInstance(k, superClass, conf);
             } catch (Exception ex1) {
                 try {
-                    return serializerClass.getConstructor(Kryo.class).newInstance(k);
+                    return serializerClass.getConstructor(Kryo.class, Class.class).newInstance(k, superClass);
                 } catch (Exception ex2) {
                     try {
-                        return serializerClass.getConstructor(Class.class).newInstance(superClass);
+                        return serializerClass.getConstructor(Kryo.class, Map.class).newInstance(k, conf);
                     } catch (Exception ex3) {
-                        return serializerClass.newInstance();
+                        try {
+                            return serializerClass.getConstructor(Kryo.class).newInstance(k);
+                        } catch (Exception ex4) {
+                            try {
+                                return serializerClass.getConstructor(Class.class, Map.class).newInstance(superClass, conf);
+                            } catch (Exception ex5) {
+                                try {
+                                    return serializerClass.getConstructor(Class.class).newInstance(superClass);
+                                } catch (Exception ex6) {
+                                    return serializerClass.newInstance();
+                                }
+                            }
+                        }
                     }
                 }
             }
